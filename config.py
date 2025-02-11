@@ -6,9 +6,20 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from dotenv import load_dotenv
 import logging
 
+from starlette.middleware.base import BaseHTTPMiddleware
 
 load_dotenv()
 app = FastAPI()
+
+class UTF8Middleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if response.headers.get("content-type", "").startswith("application/json"):
+            response.headers["Content-Type"] = "application/json; charset=utf-8"
+        return response
+
+# Добавляем middleware в приложение
+app.add_middleware(UTF8Middleware)
 
 # OAuth2 configuration
 

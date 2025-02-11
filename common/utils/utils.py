@@ -17,7 +17,7 @@ from common.models.models import (
 from common.schemas import schemas
 from common.schemas.schemas import (
     StudentCreate, TeacherCreate, TeacherSch, StudentSch,
-    StudentAnswerCreate
+    StudentAnswerCreate, AnswerItem
 )
 from config import (
     ACCESS_TOKEN_EXPIRE_MINUTES, SECRET_KEY, ALGORITHM,
@@ -307,49 +307,67 @@ def create_student_test_result(
         db: Session,
         student_id: int,
         test_id: int,
-        answers_data: List[StudentAnswerCreate]
+        answers_data: List[AnswerItem]
 ) -> models.StudentTestResult:
-    # Создаём запись о прохождении
+    # Создаём запись о прохождении теста с пустым грейдом
     result = models.StudentTestResult(
         student_id=student_id,
         test_id=test_id,
         submitted_at=datetime.utcnow(),
-        grade=None
+        grade=None  # Изначально грейд не задан
     )
     db.add(result)
     db.commit()
     db.refresh(result)
 
-    # Записываем ответы
+    # Обрабатываем каждый ответ
     for ans in answers_data:
         question = db.query(models.Question).filter(models.Question.id == ans.question_id).first()
         if not question:
-            # при желании можно выкинуть ошибку, но тут просто пропустим
+            # Если вопрос не найден, пропускаем его
             continue
 
         is_correct = None
-        # Простейшая автопроверка (опционально)
+        text_input = None
+        chosen_options = None
+
         if question.question_type == "text_input":
-            # сравним text_answer с введённым text_input (без учёта регистра и пробелов)
-            if question.text_answer and ans.text_input:
-                is_correct = (question.text_answer.strip().lower() == ans.text_input.strip().lower())
-
+            # Для текстового вопроса ожидаем, что ans.answer – строка
+            if question.text_answer and isinstance(ans.answer, str):
+                text_input = ans.answer
+                is_correct = (question.text_answer.strip().lower() == text_input.strip().lower())
         elif question.question_type in ["single_choice", "multiple_choice"]:
-            if question.correct_answers and ans.chosen_options is not None:
-                # сравним множества
-                set_correct = set(question.correct_answers)
-                set_submitted = set(ans.chosen_options)
-                is_correct = (set_correct == set_submitted)
+            # Для вариантов выбора ожидаем, что ans.answer – список строк или строка
+            if question.correct_answers and ans.answer is not None:
+                if isinstance(ans.answer, list):
+                    chosen_options = ans.answer
+                elif isinstance(ans.answer, str):
+                    chosen_options = [ans.answer]
+                if chosen_options is not None:
+                    set_submitted = set(chosen_options)
+                    set_correct = set(question.correct_answers)
+                    is_correct = (set_submitted == set_correct)
 
-        student_answer = StudentAnswer(
+        student_answer = models.StudentAnswer(
             question_id=question.id,
             result_id=result.id,
-            chosen_options=ans.chosen_options,
-            text_input=ans.text_input,
+            chosen_options=chosen_options,
+            text_input=text_input,
             is_correct=is_correct
         )
         db.add(student_answer)
 
+    db.commit()
+
+    # Выполняем автопроверку для теста:
+    test = db.query(models.Test).filter(models.Test.id == test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Тест не найден для автопроверки")
+    correct_count, total_questions, score = do_autograde_test(test, answers_data)
+    final_grade = calculate_grade_from_score(score)
+
+    # Обновляем результат теста с вычисленным грейдом
+    result.grade = final_grade
     db.commit()
     db.refresh(result)
     return result

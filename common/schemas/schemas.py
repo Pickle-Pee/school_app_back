@@ -161,7 +161,7 @@ class StudentTestResultOut(BaseModel):
     id: int
     student_id: int
     test_id: int
-    submitted_at: Optional[str] = None
+    submitted_at: Optional[datetime] = None
     grade: Optional[str] = None
     answers: List[StudentAnswerOut] = []
 

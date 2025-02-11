@@ -926,14 +926,55 @@ def submit_exam_result(
 
 @app.get("/student/my-results", response_model=List[StudentResultOut])
 def get_my_results(
-    db: Session = Depends(get_db),
-    current_student: Student = Depends(get_current_student)
+        db: Session = Depends(get_db),
+        current_student: Student = Depends(get_current_student)
 ):
     """
-    Возвращает все результаты (тесты/экзамены), связанные с текущим учеником.
+    Возвращает все результаты (тесты и экзамены) для текущего ученика.
+    Объединяем данные из таблиц StudentTestResult и StudentResult,
+    приводя их к единому формату, требуемому схемой StudentResultOut.
     """
-    results = db.query(StudentResult).filter(StudentResult.student_id == current_student.id).all()
-    return results
+    # Результаты тестов
+    test_results = db.query(models.StudentTestResult) \
+        .filter(models.StudentTestResult.student_id == current_student.id) \
+        .all()
+    # Результаты экзаменов
+    exam_results = db.query(models.StudentResult) \
+        .filter(models.StudentResult.student_id == current_student.id) \
+        .all()
+
+    combined_results = []
+
+    for r in test_results:
+        combined_results.append({
+            "id": r.id,
+            "student_id": r.student_id,
+            "test_id": r.test_id,
+            "exam_id": None,
+            "score": getattr(r, "score", 0.0),
+            "final_grade": r.grade,
+            "created_at": r.submitted_at,
+            "grade": None,
+            "subject": None,
+        })
+
+    for r in exam_results:
+        combined_results.append({
+            "id": r.id,
+            "student_id": r.student_id,
+            "test_id": None,
+            "exam_id": r.assessment_id,
+            "score": r.score,
+            "final_grade": r.final_grade,
+            "created_at": r.created_at,
+            "grade": r.grade,
+            "subject": r.subject,
+        })
+
+    # Сортируем результаты по дате (от новых к старым)
+    combined_results.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return combined_results
 
 
 @app.get("/teacher/student/{student_id}/results", response_model=List[StudentResultOut])
