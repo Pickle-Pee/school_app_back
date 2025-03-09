@@ -983,14 +983,43 @@ def get_results_for_student(
     db: Session = Depends(get_db),
     current_teacher: Teacher = Depends(get_current_teacher)
 ):
-    """
-    Возвращает результаты ученика с ID = student_id.
-    Можно добавить проверку, действительно ли этот ученик 'принадлежит' учителю, если есть такая логика.
-    """
-    # Если нужна проверка, что student_id в "классе" учителя, можно тут сделать:
-    # student = db.query(Student).filter(Student.id == student_id).first()
-    # if student.class_id != current_teacher.class_id:  # пример
-    #     raise HTTPException(403, "Ученик не относится к вам")
+    # Получаем результаты тестов для выбранного ученика
+    test_results = db.query(models.StudentTestResult) \
+        .filter(models.StudentTestResult.student_id == student_id) \
+        .all()
+    # Получаем результаты экзаменов для выбранного ученика
+    exam_results = db.query(models.StudentResult) \
+        .filter(models.StudentResult.student_id == student_id) \
+        .all()
 
-    results = db.query(StudentResult).filter(StudentResult.student_id == student_id).all()
-    return results
+    combined_results = []
+
+    for r in test_results:
+        combined_results.append({
+            "id": r.id,
+            "student_id": r.student_id,
+            "test_id": r.test_id,
+            "exam_id": None,
+            "score": getattr(r, "score", 0.0),
+            "final_grade": r.grade,
+            "created_at": r.submitted_at,
+            "grade": None,
+            "subject": None,
+        })
+
+    for r in exam_results:
+        combined_results.append({
+            "id": r.id,
+            "student_id": r.student_id,
+            "test_id": None,
+            "exam_id": r.assessment_id,
+            "score": r.score,
+            "final_grade": r.final_grade,
+            "created_at": r.created_at,
+            "grade": r.grade,
+            "subject": r.subject,
+        })
+
+    # Сортируем результаты по дате (от новых к старым)
+    combined_results.sort(key=lambda x: x["created_at"], reverse=True)
+    return combined_results
