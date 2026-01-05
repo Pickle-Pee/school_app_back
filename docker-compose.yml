@@ -19,12 +19,13 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile.dev.dev
+      dockerfile: Dockerfile.dev
     restart: always
     depends_on:
       - db
     environment:
       DATABASE_URL: postgresql://admin:admin@db:5432/new_school
+      SECRET_KEY: change-me
     ports:
       - "8000:8000"
     volumes:
