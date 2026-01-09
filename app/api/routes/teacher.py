@@ -112,7 +112,8 @@ def grades_summary(
             avg_grade = 0.0
         data.append({"id": student.id, "full_name": student.full_name, "avg_grade": round(avg_grade, 2)})
 
-    return GradeSummaryResponse(class_group=class_group, students=data)
+    return GradeSummaryResponse(
+        class_group=ClassGroupOut.model_validate(class_group), students=data)
 
 
 @router.get("/grades/by-topic", response_model=GradeByTopicResponse)
