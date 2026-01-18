@@ -1,8 +1,11 @@
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_student
-from app.models import User, Subject, Topic, Theory, Assignment, Submission, AssignmentType
+from app.models import User, Subject, Topic, Theory, Assignment, Submission, AssignmentType, ClassGroup
+from app.schemas import ClassGroupOut
 from app.schemas.student import (
     StudentProfileOut,
     SubjectOut,
@@ -93,29 +96,36 @@ def student_theory(
 @router.get("/assignments", response_model=list[AssignmentOut])
 def student_assignments(
     subject: str = Query(...),
-    type: AssignmentType = Query(...),
+    type: Optional[AssignmentType] = Query(None),
     topic_id: int = Query(...),
     db: Session = Depends(get_db),
     current_student: User = Depends(get_current_student),
 ):
     subject_obj = get_subject(db, subject)
-    assignments = (
+
+    q = (
         db.query(Assignment)
         .filter(
             Assignment.subject_id == subject_obj.id,
             Assignment.topic_id == topic_id,
-            Assignment.type == type,
             Assignment.published.is_(True),
         )
-        .all()
     )
+
+    if type is not None:
+        q = q.filter(Assignment.type == type)
+
+    assignments = q.all()
 
     output = []
     for assignment in assignments:
         attempts_used = get_attempts_used(db, current_student.id, assignment.id)
         last_submission = (
             db.query(Submission)
-            .filter(Submission.student_id == current_student.id, Submission.assignment_id == assignment.id)
+            .filter(
+                Submission.student_id == current_student.id,
+                Submission.assignment_id == assignment.id,
+            )
             .order_by(Submission.attempt_no.desc())
             .first()
         )
@@ -131,7 +141,6 @@ def student_assignments(
             )
         )
     return output
-
 
 @router.get("/assignments/{assignment_id}", response_model=AssignmentDetailOut)
 def student_assignment_detail(
@@ -228,3 +237,12 @@ def student_grades(
 
     avg_grade = sum(grades) / len(grades) if grades else 0.0
     return GradesResponse(avg_grade=round(avg_grade, 2), items=items)
+
+
+@router.get("/class-groups", response_model=list[ClassGroupOut])
+def list_class_groups(db: Session = Depends(get_db)):
+    return (
+        db.query(ClassGroup)
+        .order_by(ClassGroup.grade, ClassGroup.letter)
+        .all()
+    )

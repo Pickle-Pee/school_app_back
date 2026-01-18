@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -6,6 +6,9 @@ from app.db.base import Base
 
 class Topic(Base):
     __tablename__ = "topics"
+    __table_args__ = (
+        UniqueConstraint("class_group_id", "subject_id", "title", name="uq_topics_class_subject_title"),
+    )
 
     id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)

@@ -1,10 +1,12 @@
 from datetime import datetime
 import os
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_teacher
+from app.api.deps import get_db, get_current_teacher, get_current_user
 from app.core.config import get_settings
 from app.models import User, UserRole, ClassGroup, Subject, Topic, Theory, TheoryKind, Assignment, Submission, AssignmentType
 from app.models.teacher_class import TeacherClass
@@ -25,6 +27,7 @@ from app.schemas.assignment import (
     AssignmentDetailOut,
     SubmissionList,
 )
+from app.schemas.topic_ensure import TopicEnsureRequest
 from app.services.attempts import reset_attempts_for_student
 
 router = APIRouter()
@@ -120,7 +123,7 @@ def grades_summary(
 def grades_by_topic(
     class_id: int = Query(...),
     topic_id: int = Query(...),
-    type: AssignmentType = Query(...),
+    type: Optional[AssignmentType] = Query(None),
     subject: str = Query(...),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -128,6 +131,7 @@ def grades_by_topic(
     current_teacher: User = Depends(get_current_teacher),
 ):
     subject_obj = get_subject(db, subject)
+
     base_query = (
         db.query(Submission, Assignment, User)
         .join(Assignment, Submission.assignment_id == Assignment.id)
@@ -135,11 +139,13 @@ def grades_by_topic(
         .filter(
             Assignment.class_group_id == class_id,
             Assignment.topic_id == topic_id,
-            Assignment.type == type,
             Assignment.subject_id == subject_obj.id,
         )
         .order_by(Submission.submitted_at.desc())
     )
+
+    if type is not None:
+        base_query = base_query.filter(Assignment.type == type)
 
     total = base_query.count()
     rows = base_query.offset((page - 1) * page_size).limit(page_size).all()
@@ -462,3 +468,72 @@ def list_submissions(
         )
 
     return SubmissionList(items=items, page=page, page_size=page_size, total=total)
+
+
+
+
+@router.post("/topics/ensure", response_model=TopicOut)
+def ensure_topic(
+    payload: TopicEnsureRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TopicOut:
+    if current_user.role != UserRole.teacher:
+        raise HTTPException(status_code=403, detail="Only teacher allowed")
+
+    class_group = db.query(ClassGroup).filter(ClassGroup.id == payload.class_id).first()
+    if not class_group:
+        raise HTTPException(status_code=400, detail="Класс не найден (class_id)")
+
+    subject_name = payload.subject.strip()
+    subject = (
+        db.query(Subject)
+        .filter(func.lower(Subject.name) == subject_name.lower())
+        .first()
+    )
+    if not subject:
+        raise HTTPException(status_code=400, detail="Предмет не найден (subject)")
+
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Пустая тема (title)")
+
+    existing = (
+        db.query(Topic)
+        .filter(
+            Topic.class_group_id == class_group.id,
+            Topic.subject_id == subject.id,
+            func.lower(Topic.title) == title.lower(),
+        )
+        .first()
+    )
+    if existing:
+        return existing
+
+    topic = Topic(
+        class_group_id=class_group.id,
+        subject_id=subject.id,
+        title=title,
+    )
+    db.add(topic)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        # если был race condition (уникальность сработала / параллельные запросы)
+        existing2 = (
+            db.query(Topic)
+            .filter(
+                Topic.class_group_id == class_group.id,
+                Topic.subject_id == subject.id,
+                func.lower(Topic.title) == title.lower(),
+            )
+            .first()
+        )
+        if existing2:
+            return existing2
+        raise
+
+    db.refresh(topic)
+    return topic

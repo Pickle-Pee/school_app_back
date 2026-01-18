@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 
 from app.schemas.class_group import ClassGroupOut
 
@@ -10,8 +10,9 @@ class StudentProfileOut(BaseModel):
     phone: str
     class_group: ClassGroupOut
 
-    class Config:
-        orm_mode = True
+    model_config = {
+        "from_attributes": True
+    }
 
 
 class SubjectOut(BaseModel):
@@ -64,3 +65,15 @@ class GradeItem(BaseModel):
 class GradesResponse(BaseModel):
     avg_grade: float
     items: List[GradeItem]
+
+
+class StudentRegisterRequest(BaseModel):
+    full_name: str
+    phone: str
+    password: str
+    class_group_id: int
+    email: Optional[EmailStr] = None
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
