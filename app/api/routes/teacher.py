@@ -1,8 +1,9 @@
 from datetime import datetime
 import os
 from typing import Optional
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, Form, File
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -212,23 +213,47 @@ async def create_theory(
     request: Request,
     db: Session = Depends(get_db),
     current_teacher: User = Depends(get_current_teacher),
+
+    # multipart/form-data поля (для CASE 1)
+    class_id: int | None = Form(None),
+    subject: str | None = Form(None),
+    topic_id: int | None = Form(None),
+    kind: str | None = Form(None),
+    file: UploadFile | None = File(None),
 ):
     content_type = request.headers.get("content-type", "")
 
+    # ----------------------------------------
+    # CASE 1: multipart/form-data (файл)
+    # ----------------------------------------
     if content_type.startswith("multipart/form-data"):
-        form = await request.form()
-        class_id = int(form.get("class_id"))
-        subject = form.get("subject")
-        topic_id = int(form.get("topic_id"))
-        kind = form.get("kind")
-        upload = form.get("file")
-        if kind != "file" or upload is None:
-            raise HTTPException(status_code=400, detail="File upload required for file kind")
+        # Валидация полей формы
+        if class_id is None or topic_id is None or subject is None or kind is None:
+            raise HTTPException(400, "Invalid form fields")
+
+        if kind != "file":
+            raise HTTPException(400, "Invalid kind: expected 'file'")
+
+        if file is None:
+            raise HTTPException(400, "File upload is required")
+
         subject_obj = get_subject(db, subject)
+
         os.makedirs(settings.files_dir, exist_ok=True)
-        file_path = f"{settings.files_dir}/{datetime.utcnow().timestamp()}_{upload.filename}"
+
+        # Генерация безопасного пути к файлу
+        ext = os.path.splitext(file.filename or "")[1]
+        safe_filename = f"{uuid4().hex}{ext}"
+        file_path = os.path.join(settings.files_dir, safe_filename)
+
+        # Сохранение файла чанками (без перегрузки памяти)
         with open(file_path, "wb") as output:
-            output.write(await upload.read())
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                output.write(chunk)
+
         theory = Theory(
             class_group_id=class_id,
             subject_id=subject_obj.id,
@@ -236,10 +261,20 @@ async def create_theory(
             kind=TheoryKind.file,
             file_path=file_path,
         )
+
+    # ----------------------------------------
+    # CASE 2: JSON (текстовая теория)
+    # ----------------------------------------
     else:
         payload = await request.json()
-        data = TheoryCreate(**payload)
+
+        try:
+            data = TheoryCreate(**payload)
+        except Exception as e:
+            raise HTTPException(400, f"Invalid JSON payload: {e}")
+
         subject_obj = get_subject(db, data.subject)
+
         theory = Theory(
             class_group_id=data.class_id,
             subject_id=subject_obj.id,
@@ -248,6 +283,9 @@ async def create_theory(
             text=data.text,
         )
 
+    # ----------------------------------------
+    # SAVE
+    # ----------------------------------------
     db.add(theory)
     db.commit()
     db.refresh(theory)
@@ -261,7 +299,6 @@ async def create_theory(
         file_url=f"/files/{theory.id}" if theory.file_path else None,
         updated_at=theory.updated_at.isoformat() if theory.updated_at else "",
     )
-
 
 @router.patch("/theory/{theory_id}", response_model=TheoryOut)
 def update_theory(
